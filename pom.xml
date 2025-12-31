@@ -52,7 +52,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.higentec.single.CameraToRTSPGUI</mainClass>
+                            <mainClass>com.tool.single.CameraToRTSPGUI</mainClass>
                         </manifest>
                     </archive>
                     <descriptorRefs>
