@@ -81,7 +81,7 @@ public class CameraToRTSPGUI extends JFrame {
         // 延迟一小段时间开始检测，确保UI完全加载
         SwingUtilities.invokeLater(() -> {
             try {
-                Thread.sleep(300); // 给UI一点时间加载
+                Thread.sleep(150); // 给UI一点时间加载
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
