@@ -3,17 +3,16 @@ package com.tool.single;
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.*;
+import org.bytedeco.javacv.Frame;
 import org.bytedeco.opencv.global.opencv_videoio;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.bytedeco.opencv.opencv_videoio.VideoCapture;
-import org.bytedeco.javacv.Frame;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.TitledBorder;
 import java.awt.*;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
+import java.awt.event.*;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -47,8 +46,13 @@ public class CameraToRTSPGUI extends JFrame {
     private StreamController streamController;
     private PreviewThread previewThread;
     private List<String> cameraList;
-    private Map<Integer, String> cameraResolutions;
+    private Map<Integer, String> cameraResolutions; // 存储摄像头检测到的分辨率
     private JTextArea logArea;
+
+    // 添加按钮状态控制变量
+    private volatile boolean isRefreshing = false;
+    private volatile boolean isPreviewRunning = false;
+    private volatile boolean isStreaming = false;
 
     // 分辨率预设
     private static final String[] RESOLUTIONS = {
@@ -59,21 +63,11 @@ public class CameraToRTSPGUI extends JFrame {
     // 帧率预设
     private static final Integer[] FPS_OPTIONS = {10, 15, 20, 25, 30};
 
-    // 添加标志位，防止重复点击
-    private volatile boolean isRefreshing = false;
-    private volatile boolean isPreviewing = false;
-    private volatile boolean isStreaming = false;
-
     public CameraToRTSPGUI() {
         initComponents();
 
         // 新增代码：设置窗口图标
         setWindowIcon();
-
-        // 改为在Swing事件线程中初始化摄像头检测
-        SwingUtilities.invokeLater(() -> {
-            detectCamerasImpl();
-        });
 
         // 窗体关闭监听
         addWindowListener(new WindowAdapter() {
@@ -81,6 +75,17 @@ public class CameraToRTSPGUI extends JFrame {
                 stopAllStreaming();
                 System.exit(0);
             }
+        });
+
+        // 修复：添加窗口初始化后的摄像头检测
+        // 延迟一小段时间开始检测，确保UI完全加载
+        SwingUtilities.invokeLater(() -> {
+            try {
+                Thread.sleep(300); // 给UI一点时间加载
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            detectCameras();
         });
     }
 
@@ -112,7 +117,7 @@ public class CameraToRTSPGUI extends JFrame {
     }
 
     private void initComponents() {
-        setTitle("VideoStream-RTSP推流工具 v2026.0104");
+        setTitle("摄像头RTSP推流工具 v7.0");
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
 
         setLayout(new BorderLayout(10, 10));
@@ -158,12 +163,10 @@ public class CameraToRTSPGUI extends JFrame {
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         // 摄像头选择
-        gbc.gridx = 0;
-        gbc.gridy = 0;
+        gbc.gridx = 0; gbc.gridy = 0;
         panel.add(createLabel("摄像头选择:"), gbc);
 
-        gbc.gridx = 1;
-        gbc.gridy = 0;
+        gbc.gridx = 1; gbc.gridy = 0;
         gbc.gridwidth = 2;
         cameraComboBox = new JComboBox<>();
         cameraComboBox.setPreferredSize(new Dimension(250, 30));
@@ -171,10 +174,10 @@ public class CameraToRTSPGUI extends JFrame {
         panel.add(cameraComboBox, gbc);
 
         gbc.gridwidth = 1;
-        gbc.gridx = 3;
-        gbc.gridy = 0;
+        gbc.gridx = 3; gbc.gridy = 0;
         refreshButton = createStyledButton("刷新列表", new Color(70, 130, 180));
         refreshButton.addActionListener(e -> {
+            // 防止重复点击
             if (!isRefreshing) {
                 refreshCameras();
             }
@@ -183,73 +186,77 @@ public class CameraToRTSPGUI extends JFrame {
         panel.add(refreshButton, gbc);
 
         // RTSP地址
-        gbc.gridx = 0;
-        gbc.gridy = 1;
+        gbc.gridx = 0; gbc.gridy = 1;
         gbc.gridwidth = 4;
         panel.add(createLabel("RTSP服务器地址:"), gbc);
 
-        gbc.gridx = 0;
-        gbc.gridy = 2;
+        gbc.gridx = 0; gbc.gridy = 2;
         rtspUrlField = new JTextField("rtsp://localhost:8554/live", 30);
         rtspUrlField.setFont(new Font("宋体", Font.PLAIN, 12));
         rtspUrlField.setToolTipText("RTSP服务器地址，如：rtsp://IP:端口/流名称");
         panel.add(rtspUrlField, gbc);
 
         // 分辨率设置
-        gbc.gridx = 0;
-        gbc.gridy = 3;
+        gbc.gridx = 0; gbc.gridy = 3;
         gbc.gridwidth = 2;
         panel.add(createLabel("视频分辨率:"), gbc);
 
-        gbc.gridx = 2;
-        gbc.gridy = 3;
+        gbc.gridx = 2; gbc.gridy = 3;
         gbc.gridwidth = 2;
         panel.add(createLabel("帧率(FPS):"), gbc);
 
-        gbc.gridx = 0;
-        gbc.gridy = 4;
+        gbc.gridx = 0; gbc.gridy = 4;
         gbc.gridwidth = 2;
         resolutionComboBox = new JComboBox<>(RESOLUTIONS);
         resolutionComboBox.setFont(new Font("宋体", Font.PLAIN, 12));
-        resolutionComboBox.addActionListener(e -> onResolutionOrFpsChanged());
+        resolutionComboBox.addActionListener(e -> {
+            if (isPreviewRunning) {
+                // 如果预览中，重启预览以应用新分辨率
+                restartPreviewWithNewSettings();
+            }
+        });
         panel.add(resolutionComboBox, gbc);
 
-        gbc.gridx = 2;
-        gbc.gridy = 4;
+        gbc.gridx = 2; gbc.gridy = 4;
         gbc.gridwidth = 2;
         fpsComboBox = new JComboBox<>(FPS_OPTIONS);
         fpsComboBox.setSelectedItem(30);
         fpsComboBox.setFont(new Font("宋体", Font.PLAIN, 12));
-        fpsComboBox.addActionListener(e -> onResolutionOrFpsChanged());
+        fpsComboBox.addActionListener(e -> {
+            if (isPreviewRunning) {
+                // 如果预览中，重启预览以应用新帧率
+                restartPreviewWithNewSettings();
+            }
+        });
         panel.add(fpsComboBox, gbc);
 
         // 操作按钮面板
-        gbc.gridx = 0;
-        gbc.gridy = 5;
+        gbc.gridx = 0; gbc.gridy = 5;
         gbc.gridwidth = 4;
         gbc.insets = new Insets(15, 8, 8, 8);
         JPanel buttonPanel = new JPanel(new GridLayout(2, 2, 10, 10));
         buttonPanel.setBackground(Color.WHITE);
 
-        previewButton = createStyledButton("\uD83D\uDD0D 打开预览", new Color(30, 144, 255));
+        previewButton = createStyledButton("🔍 打开预览", new Color(30, 144, 255));
         previewButton.addActionListener(e -> {
-            if (!isPreviewing) {
+            // 防止重复点击
+            if (!isPreviewRunning) {
                 startPreview();
             }
         });
         buttonPanel.add(previewButton);
 
-        closePreviewButton = createStyledButton("X 关闭预览", new Color(255, 140, 0));
+        closePreviewButton = createStyledButton("✕ 关闭预览", new Color(255, 140, 0));
         closePreviewButton.addActionListener(e -> {
-            if (isPreviewing) {
-                closePreview();
-            }
+            // 确保可以正常关闭
+            closePreview();
         });
         closePreviewButton.setEnabled(false);
         buttonPanel.add(closePreviewButton);
 
         startButton = createStyledButton("▶ 开始推流", new Color(0, 150, 0));
         startButton.addActionListener(e -> {
+            // 防止重复点击
             if (!isStreaming) {
                 startStreaming();
             }
@@ -258,9 +265,8 @@ public class CameraToRTSPGUI extends JFrame {
 
         stopButton = createStyledButton("⏹ 停止推流", new Color(200, 0, 0));
         stopButton.addActionListener(e -> {
-            if (isStreaming) {
-                stopStreaming();
-            }
+            // 确保可以正常停止
+            stopStreaming();
         });
         stopButton.setEnabled(false);
         buttonPanel.add(stopButton);
@@ -268,8 +274,7 @@ public class CameraToRTSPGUI extends JFrame {
         panel.add(buttonPanel, gbc);
 
         // 状态显示
-        gbc.gridx = 0;
-        gbc.gridy = 6;
+        gbc.gridx = 0; gbc.gridy = 6;
         gbc.gridwidth = 4;
         gbc.insets = new Insets(15, 8, 8, 8);
         statusLabel = new JLabel("状态: 就绪", SwingConstants.CENTER);
@@ -278,8 +283,7 @@ public class CameraToRTSPGUI extends JFrame {
         panel.add(statusLabel, gbc);
 
         // 统计信息
-        gbc.gridx = 0;
-        gbc.gridy = 7;
+        gbc.gridx = 0; gbc.gridy = 7;
         statsLabel = new JLabel("帧数: 0 | 时长: 0s | FPS: 0.0", SwingConstants.CENTER);
         statsLabel.setFont(new Font("宋体", Font.BOLD, 12));
         statsLabel.setForeground(Color.DARK_GRAY);
@@ -310,25 +314,32 @@ public class CameraToRTSPGUI extends JFrame {
         JButton button = new JButton(text);
         button.setBackground(bgColor);
         button.setForeground(Color.BLACK);
-        String[] fontChain = {
-                "Segoe UI Emoji",    // 首选：用于显示彩色Emoji和符号
-                "Segoe UI Symbol",   // 次选：用于显示单色符号
-                "微软雅黑" // 保底：用于显示中文及其他所有字符
-        };
-        button.setFont(new Font(String.join(", ", fontChain), Font.BOLD, 12));
+        button.setFont(new Font("微软雅黑", Font.BOLD, 12));
         button.setFocusPainted(false);
         button.setBorder(BorderFactory.createRaisedBevelBorder());
         button.setPreferredSize(new Dimension(140, 40));
 
+        // 移除原有的MouseListener，使用新的实现
         button.addMouseListener(new java.awt.event.MouseAdapter() {
             public void mouseEntered(java.awt.event.MouseEvent evt) {
-                button.setBackground(bgColor.brighter());
-                button.setForeground(Color.WHITE);
+                if (button.isEnabled()) {
+                    button.setBackground(bgColor.brighter());
+                    button.setForeground(Color.WHITE);
+                }
             }
-
             public void mouseExited(java.awt.event.MouseEvent evt) {
-                button.setBackground(bgColor);
-                button.setForeground(Color.BLACK);
+                if (button.isEnabled()) {
+                    button.setBackground(bgColor);
+                    button.setForeground(Color.BLACK);
+                }
+            }
+        });
+
+        // 添加焦点监听器，解决按钮点击无效问题
+        button.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusGained(FocusEvent e) {
+                button.repaint();
             }
         });
 
@@ -403,115 +414,108 @@ public class CameraToRTSPGUI extends JFrame {
 
         isRefreshing = true;
         refreshButton.setEnabled(false);
-        refreshButton.setText("检测中...");
 
         logArea.append("[" + getCurrentTime() + "] 刷新摄像头列表...\n");
 
         // 关闭当前预览
-        if (isPreviewing) {
-            closePreview();
-        }
+        closePreview();
 
-        // 在单独的线程中检测摄像头
-        SwingWorker<Void, Void> worker = new SwingWorker<Void, Void>() {
-            @Override
-            protected Void doInBackground() {
-                detectCamerasImpl();
-                return null;
-            }
-
-            @Override
-            protected void done() {
+        // 开始检测摄像头 - 在后台线程中执行
+        new Thread(() -> {
+            try {
+                detectCameras();
+            } finally {
                 SwingUtilities.invokeLater(() -> {
-                    refreshButton.setEnabled(true);
-                    refreshButton.setText("刷新列表");
                     isRefreshing = false;
+                    refreshButton.setEnabled(true);
                 });
             }
-        };
-        worker.execute();
+        }).start();
     }
 
-    private void detectCamerasImpl() {
+    private void detectCameras() {
         logArea.append("[" + getCurrentTime() + "] 正在检测摄像头...\n");
-        List<String> newCameraList = new ArrayList<>();
-        Map<Integer, String> newCameraResolutions = new HashMap<>();
 
-        for (int i = 0; i < 4; i++) {
-            try {
-                logArea.append("[" + getCurrentTime() + "] 检测索引 " + i + "...\n");
+        // 在后台线程中执行摄像头检测
+        new Thread(() -> {
+            List<String> newCameraList = new ArrayList<>();
+            Map<Integer, String> newCameraResolutions = new HashMap<>();
 
-                VideoCapture capture = new VideoCapture();
+            for (int i = 0; i < 4; i++) {
+                try {
+                    logArea.append("[" + getCurrentTime() + "] 检测索引 " + i + "...\n");
 
-                // 尝试使用DirectShow API
-                boolean opened = capture.open(i, opencv_videoio.CAP_DSHOW);
+                    VideoCapture capture = new VideoCapture();
 
-                if (opened && capture.isOpened()) {
-                    Thread.sleep(300);
+                    // 尝试使用DirectShow API
+                    boolean opened = capture.open(i, opencv_videoio.CAP_DSHOW);
 
-                    Mat frame = new Mat();
-                    int retryCount = 0;
-                    boolean readSuccess = false;
+                    if (opened && capture.isOpened()) {
+                        Thread.sleep(300);
 
-                    while (retryCount < 3 && !readSuccess) {
-                        readSuccess = capture.read(frame);
-                        if (!readSuccess) {
-                            Thread.sleep(100);
-                            retryCount++;
+                        Mat frame = new Mat();
+                        int retryCount = 0;
+                        boolean readSuccess = false;
+
+                        while (retryCount < 3 && !readSuccess) {
+                            readSuccess = capture.read(frame);
+                            if (!readSuccess) {
+                                Thread.sleep(100);
+                                retryCount++;
+                            }
                         }
+
+                        if (readSuccess && !frame.empty()) {
+                            int width = frame.cols();
+                            int height = frame.rows();
+                            String resolution = width + "x" + height;
+                            String info = String.format("摄像头 %d (%dx%d)", i, width, height);
+                            newCameraList.add(info);
+                            newCameraResolutions.put(i, resolution);
+                            logArea.append("[" + getCurrentTime() + "] ✓ 找到: " + info + "\n");
+                        }
+
+                        frame.release();
                     }
 
-                    if (readSuccess && !frame.empty()) {
-                        int width = frame.cols();
-                        int height = frame.rows();
-                        String resolution = width + "x" + height;
-                        String info = String.format("摄像头 %d (%dx%d)", i, width, height);
-                        newCameraList.add(info);
-                        newCameraResolutions.put(i, resolution);
-                        logArea.append("[" + getCurrentTime() + "] ✓ 找到: " + info + "\n");
-                    }
-
-                    frame.release();
                     capture.release();
+                    Thread.sleep(150);
+
+                } catch (Exception e) {
+                    // 忽略检测错误
+                }
+            }
+
+            SwingUtilities.invokeLater(() -> {
+                String previouslySelected = (String) cameraComboBox.getSelectedItem();
+                cameraList = newCameraList;
+                cameraResolutions = newCameraResolutions;
+
+                cameraComboBox.removeAllItems();
+
+                for (String camera : cameraList) {
+                    cameraComboBox.addItem(camera);
                 }
 
-                Thread.sleep(150);
-
-            } catch (Exception e) {
-                // 忽略检测错误
-            }
-        }
-
-        // 更新UI
-        SwingUtilities.invokeLater(() -> {
-            String previouslySelected = (String) cameraComboBox.getSelectedItem();
-            cameraList = newCameraList;
-            cameraResolutions = newCameraResolutions;
-
-            cameraComboBox.removeAllItems();
-
-            for (String camera : cameraList) {
-                cameraComboBox.addItem(camera);
-            }
-
-            if (cameraList.size() > 0) {
-                // 尝试恢复之前的选择
-                if (previouslySelected != null) {
-                    for (int i = 0; i < cameraList.size(); i++) {
-                        if (cameraList.get(i).equals(previouslySelected)) {
-                            cameraComboBox.setSelectedIndex(i);
-                            break;
+                if (cameraList.size() > 0) {
+                    // 尝试恢复之前的选择
+                    if (previouslySelected != null) {
+                        for (int i = 0; i < cameraList.size(); i++) {
+                            if (cameraList.get(i).equals(previouslySelected)) {
+                                cameraComboBox.setSelectedIndex(i);
+                                break;
+                            }
                         }
                     }
-                }
 
-                statusLabel.setText("状态: 就绪 (" + cameraList.size() + "个摄像头)");
-                logArea.append("[" + getCurrentTime() + "] 摄像头检测完成\n");
-            } else {
-                statusLabel.setText("状态: 未检测到摄像头");
-                logArea.append("[" + getCurrentTime() + "] ⚠ 未检测到摄像头\n");
-            }
-        });
+                    statusLabel.setText("状态: 就绪 (" + cameraList.size() + "个摄像头)");
+                    logArea.append("[" + getCurrentTime() + "] 摄像头检测完成\n");
+                } else {
+                    statusLabel.setText("状态: 未检测到摄像头");
+                    logArea.append("[" + getCurrentTime() + "] ⚠ 未检测到摄像头\n");
+                }
+            });
+        }).start();
     }
 
     private void onCameraSelectionChanged() {
@@ -537,31 +541,6 @@ public class CameraToRTSPGUI extends JFrame {
             } catch (Exception e) {
                 // 解析失败，忽略
             }
-        }
-    }
-
-    private void onResolutionOrFpsChanged() {
-        if (isPreviewing) {
-            // 如果正在预览，重新启动预览
-            logArea.append("[" + getCurrentTime() + "] 分辨率/帧率已更改，重新启动预览...\n");
-
-            new Thread(() -> {
-                // 先关闭预览
-                closePreview();
-
-                // 短暂延迟后重新开启
-                try {
-                    Thread.sleep(500);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-
-                SwingUtilities.invokeLater(() -> {
-                    if (!isPreviewing) {
-                        startPreview();
-                    }
-                });
-            }).start();
         }
     }
 
@@ -617,7 +596,7 @@ public class CameraToRTSPGUI extends JFrame {
     }
 
     private void startPreview() {
-        if (isPreviewing) {
+        if (isPreviewRunning) {
             return;
         }
 
@@ -638,45 +617,69 @@ public class CameraToRTSPGUI extends JFrame {
         logArea.append("[" + getCurrentTime() + "] 帧率: " + fps + "fps\n");
         logArea.append("[" + getCurrentTime() + "] 颜色修复: 启用\n");
 
-        // 更新UI状态
-        isPreviewing = true;
-        previewButton.setEnabled(false);
-        closePreviewButton.setEnabled(true);
-        statusLabel.setText("状态: 预览中...");
-        statusLabel.setForeground(new Color(30, 144, 255));
+        // 停止现有的预览
+        closePreview();
 
         // 创建预览线程
         previewThread = new PreviewThread(cameraIndex, width, height, fps);
         previewThread.start();
+
+        isPreviewRunning = true;
+        updateButtonStates();
+
+        statusLabel.setText("状态: 预览中...");
+        statusLabel.setForeground(new Color(30, 144, 255));
     }
 
     private void closePreview() {
-        if (!isPreviewing) {
+        if (!isPreviewRunning) {
             return;
         }
 
         logArea.append("[" + getCurrentTime() + "] 关闭预览...\n");
 
-        isPreviewing = false;
-
         if (previewThread != null) {
             previewThread.stopPreview();
+            try {
+                // 等待预览线程结束
+                previewThread.join(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             previewThread = null;
         }
 
-        SwingUtilities.invokeLater(() -> {
-            previewButton.setEnabled(true);
-            closePreviewButton.setEnabled(false);
+        isPreviewRunning = false;
+        updateButtonStates();
 
+        SwingUtilities.invokeLater(() -> {
             previewLabel.setIcon(null);
             previewLabel.setText("预览已关闭");
             previewLabel.setForeground(Color.WHITE);
-
-            statusLabel.setText("状态: 就绪");
-            statusLabel.setForeground(new Color(0, 100, 0));
         });
 
         logArea.append("[" + getCurrentTime() + "] 预览已关闭\n");
+    }
+
+    private void restartPreviewWithNewSettings() {
+        if (isPreviewRunning) {
+            logArea.append("[" + getCurrentTime() + "] 应用新设置，重启预览...\n");
+            closePreview();
+
+            // 短暂延迟后重新开始预览
+            new Thread(() -> {
+                try {
+                    Thread.sleep(300);
+                    SwingUtilities.invokeLater(() -> {
+                        if (!isPreviewRunning) {
+                            startPreview();
+                        }
+                    });
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }).start();
+        }
     }
 
     private void startStreaming() {
@@ -708,41 +711,31 @@ public class CameraToRTSPGUI extends JFrame {
             logArea.append("[" + getCurrentTime() + "] 帧率: " + fps + "fps\n");
             logArea.append("[" + getCurrentTime() + "] 颜色修复: 启用\n");
 
-            // 更新UI状态
-            isStreaming = true;
-            startButton.setEnabled(false);
-            stopButton.setEnabled(true);
-            statusLabel.setText("状态: 推流中...");
-            statusLabel.setForeground(new Color(0, 150, 0));
-
             // 停止现有的流
-            if (streamController != null) {
-                streamController.stopStreaming();
-                streamController = null;
-            }
+            stopStreaming();
 
             streamController = new StreamController();
 
-            // 在单独的线程中启动推流
             new Thread(() -> {
                 try {
                     streamController.startStreaming(cameraIndex, rtspUrl, width, height, fps);
                 } catch (Exception e) {
                     SwingUtilities.invokeLater(() -> {
-                        isStreaming = false;
                         statusLabel.setText("状态: 推流失败");
-                        startButton.setEnabled(true);
-                        stopButton.setEnabled(false);
-                        logArea.append("[" + getCurrentTime() + "] 推流失败: " + e.getMessage() + "\n");
+                        isStreaming = false;
+                        updateButtonStates();
                     });
                 }
             }).start();
 
+            isStreaming = true;
+            updateButtonStates();
+
+            statusLabel.setText("状态: 推流中...");
+            statusLabel.setForeground(new Color(0, 150, 0));
+
         } catch (Exception e) {
             logArea.append("[" + getCurrentTime() + "] 启动错误: " + e.getMessage() + "\n");
-            isStreaming = false;
-            startButton.setEnabled(true);
-            stopButton.setEnabled(false);
         }
     }
 
@@ -775,22 +768,48 @@ public class CameraToRTSPGUI extends JFrame {
 
         logArea.append("[" + getCurrentTime() + "] 停止推流...\n");
 
-        isStreaming = false;
-
         if (streamController != null) {
             streamController.stopStreaming();
+            try {
+                // 等待流控制器停止
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             streamController = null;
         }
 
-        SwingUtilities.invokeLater(() -> {
-            startButton.setEnabled(true);
-            stopButton.setEnabled(false);
-            statusLabel.setText("状态: 已停止");
-            statusLabel.setForeground(Color.BLUE);
-            statsLabel.setText("帧数: 0 | 时长: 0s | FPS: 0.0");
-        });
+        isStreaming = false;
+        updateButtonStates();
+
+        statusLabel.setText("状态: 已停止");
+        statusLabel.setForeground(Color.BLUE);
+        statsLabel.setText("帧数: 0 | 时长: 0s | FPS: 0.0");
 
         logArea.append("[" + getCurrentTime() + "] 推流已停止\n");
+    }
+
+    // 更新按钮状态的方法
+    private void updateButtonStates() {
+        SwingUtilities.invokeLater(() -> {
+            // 防止重复调用导致的竞争条件
+            previewButton.setEnabled(!isPreviewRunning && !isRefreshing);
+            closePreviewButton.setEnabled(isPreviewRunning && !isRefreshing);
+            startButton.setEnabled(!isStreaming && !isRefreshing);
+            stopButton.setEnabled(isStreaming && !isRefreshing);
+
+            // 重新绘制按钮确保显示正确
+            previewButton.repaint();
+            closePreviewButton.repaint();
+            startButton.repaint();
+            stopButton.repaint();
+            refreshButton.repaint();
+
+            // 确保焦点可以正常工作
+            if (!isPreviewRunning && !isStreaming && !isRefreshing) {
+                cameraComboBox.requestFocusInWindow();
+            }
+        });
     }
 
     private void stopAllStreaming() {
@@ -806,7 +825,7 @@ public class CameraToRTSPGUI extends JFrame {
     // ==================== 预览线程类 ====================
 
     class PreviewThread extends Thread {
-        private final AtomicBoolean isRunning = new AtomicBoolean(true);
+        private final AtomicBoolean isRunning = new AtomicBoolean(false);
         private VideoCapture capture;
         private final int cameraIndex;
         private int width;
@@ -822,6 +841,8 @@ public class CameraToRTSPGUI extends JFrame {
 
         @Override
         public void run() {
+            isRunning.set(true);
+
             try {
                 logArea.append("[" + getCurrentTime() + "] 预览初始化...\n");
 
@@ -952,7 +973,6 @@ public class CameraToRTSPGUI extends JFrame {
                 SwingUtilities.invokeLater(() -> {
                     previewLabel.setText("预览失败: " + e.getMessage());
                     previewLabel.setForeground(Color.RED);
-                    closePreview();
                 });
 
             } finally {
@@ -960,11 +980,9 @@ public class CameraToRTSPGUI extends JFrame {
                     capture.release();
                 }
 
-                SwingUtilities.invokeLater(() -> {
-                    isPreviewing = false;
-                    previewButton.setEnabled(true);
-                    closePreviewButton.setEnabled(false);
-                });
+                // 更新主界面状态
+                isPreviewRunning = false;
+                updateButtonStates();
             }
         }
 
@@ -976,7 +994,7 @@ public class CameraToRTSPGUI extends JFrame {
     // ==================== 推流控制器类 ====================
 
     class StreamController {
-        private final AtomicBoolean isRunning = new AtomicBoolean(true);
+        private final AtomicBoolean isRunning = new AtomicBoolean(false);
         private FFmpegFrameRecorder recorder;
         private VideoCapture capture;
         private long frameCount = 0;
@@ -985,10 +1003,11 @@ public class CameraToRTSPGUI extends JFrame {
         public void startStreaming(int cameraIndex, String rtspUrl,
                                    int width, int height, int fps) throws Exception {
 
-            if (!isRunning.get()) {
-                return;
+            if (isRunning.get()) {
+                throw new IllegalStateException("推流已在运行中");
             }
 
+            isRunning.set(true);
             frameCount = 0;
             startTime = System.currentTimeMillis();
 
@@ -1103,6 +1122,10 @@ public class CameraToRTSPGUI extends JFrame {
             } catch (Exception e) {
                 // 忽略
             }
+
+            // 更新主界面状态
+            isStreaming = false;
+            updateButtonStates();
         }
 
         public void stopStreaming() {
