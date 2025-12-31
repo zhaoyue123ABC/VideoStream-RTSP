@@ -7,6 +7,7 @@ import org.bytedeco.opencv.global.opencv_videoio;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.bytedeco.opencv.opencv_videoio.VideoCapture;
 import org.bytedeco.javacv.Frame;
+
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.TitledBorder;
@@ -17,6 +18,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
+import java.net.URL;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -65,6 +67,9 @@ public class CameraToRTSPGUI extends JFrame {
     public CameraToRTSPGUI() {
         initComponents();
 
+        // 新增代码：设置窗口图标
+        setWindowIcon();
+
         // 改为在Swing事件线程中初始化摄像头检测
         SwingUtilities.invokeLater(() -> {
             detectCamerasImpl();
@@ -77,6 +82,33 @@ public class CameraToRTSPGUI extends JFrame {
                 System.exit(0);
             }
         });
+    }
+
+    /**
+     * 设置窗口图标
+     */
+    private void setWindowIcon() {
+        try {
+            // 方法1：从项目资源文件加载（推荐）
+            // 假设你的图标文件名为icon.png，放在src/main/resources/或src/resources/目录下
+            URL iconUrl = getClass().getResource("/avatar.png");
+            if (iconUrl != null) {
+                ImageIcon icon = new ImageIcon(iconUrl);
+                setIconImage(icon.getImage());
+                System.out.println("窗口图标设置成功（从资源文件）");
+            } else {
+                // 方法2：使用绝对路径（备选）
+                // ImageIcon icon = new ImageIcon("path/to/your/icon.png");
+                // setIconImage(icon.getImage());
+
+                // 方法3：创建简单默认图标（备选方案）
+//                createDefaultIcon();
+            }
+        } catch (Exception e) {
+            System.err.println("设置窗口图标失败: " + e.getMessage());
+            // 创建默认图标作为后备
+//            createDefaultIcon();
+        }
     }
 
     private void initComponents() {
@@ -126,10 +158,12 @@ public class CameraToRTSPGUI extends JFrame {
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         // 摄像头选择
-        gbc.gridx = 0; gbc.gridy = 0;
+        gbc.gridx = 0;
+        gbc.gridy = 0;
         panel.add(createLabel("摄像头选择:"), gbc);
 
-        gbc.gridx = 1; gbc.gridy = 0;
+        gbc.gridx = 1;
+        gbc.gridy = 0;
         gbc.gridwidth = 2;
         cameraComboBox = new JComboBox<>();
         cameraComboBox.setPreferredSize(new Dimension(250, 30));
@@ -137,7 +171,8 @@ public class CameraToRTSPGUI extends JFrame {
         panel.add(cameraComboBox, gbc);
 
         gbc.gridwidth = 1;
-        gbc.gridx = 3; gbc.gridy = 0;
+        gbc.gridx = 3;
+        gbc.gridy = 0;
         refreshButton = createStyledButton("刷新列表", new Color(70, 130, 180));
         refreshButton.addActionListener(e -> {
             if (!isRefreshing) {
@@ -148,33 +183,39 @@ public class CameraToRTSPGUI extends JFrame {
         panel.add(refreshButton, gbc);
 
         // RTSP地址
-        gbc.gridx = 0; gbc.gridy = 1;
+        gbc.gridx = 0;
+        gbc.gridy = 1;
         gbc.gridwidth = 4;
         panel.add(createLabel("RTSP服务器地址:"), gbc);
 
-        gbc.gridx = 0; gbc.gridy = 2;
+        gbc.gridx = 0;
+        gbc.gridy = 2;
         rtspUrlField = new JTextField("rtsp://localhost:8554/live", 30);
         rtspUrlField.setFont(new Font("宋体", Font.PLAIN, 12));
         rtspUrlField.setToolTipText("RTSP服务器地址，如：rtsp://IP:端口/流名称");
         panel.add(rtspUrlField, gbc);
 
         // 分辨率设置
-        gbc.gridx = 0; gbc.gridy = 3;
+        gbc.gridx = 0;
+        gbc.gridy = 3;
         gbc.gridwidth = 2;
         panel.add(createLabel("视频分辨率:"), gbc);
 
-        gbc.gridx = 2; gbc.gridy = 3;
+        gbc.gridx = 2;
+        gbc.gridy = 3;
         gbc.gridwidth = 2;
         panel.add(createLabel("帧率(FPS):"), gbc);
 
-        gbc.gridx = 0; gbc.gridy = 4;
+        gbc.gridx = 0;
+        gbc.gridy = 4;
         gbc.gridwidth = 2;
         resolutionComboBox = new JComboBox<>(RESOLUTIONS);
         resolutionComboBox.setFont(new Font("宋体", Font.PLAIN, 12));
         resolutionComboBox.addActionListener(e -> onResolutionOrFpsChanged());
         panel.add(resolutionComboBox, gbc);
 
-        gbc.gridx = 2; gbc.gridy = 4;
+        gbc.gridx = 2;
+        gbc.gridy = 4;
         gbc.gridwidth = 2;
         fpsComboBox = new JComboBox<>(FPS_OPTIONS);
         fpsComboBox.setSelectedItem(30);
@@ -183,13 +224,14 @@ public class CameraToRTSPGUI extends JFrame {
         panel.add(fpsComboBox, gbc);
 
         // 操作按钮面板
-        gbc.gridx = 0; gbc.gridy = 5;
+        gbc.gridx = 0;
+        gbc.gridy = 5;
         gbc.gridwidth = 4;
         gbc.insets = new Insets(15, 8, 8, 8);
         JPanel buttonPanel = new JPanel(new GridLayout(2, 2, 10, 10));
         buttonPanel.setBackground(Color.WHITE);
 
-        previewButton = createStyledButton("🔍 打开预览", new Color(30, 144, 255));
+        previewButton = createStyledButton("\uD83D\uDD0D 打开预览", new Color(30, 144, 255));
         previewButton.addActionListener(e -> {
             if (!isPreviewing) {
                 startPreview();
@@ -197,7 +239,7 @@ public class CameraToRTSPGUI extends JFrame {
         });
         buttonPanel.add(previewButton);
 
-        closePreviewButton = createStyledButton("✕ 关闭预览", new Color(255, 140, 0));
+        closePreviewButton = createStyledButton("X 关闭预览", new Color(255, 140, 0));
         closePreviewButton.addActionListener(e -> {
             if (isPreviewing) {
                 closePreview();
@@ -226,7 +268,8 @@ public class CameraToRTSPGUI extends JFrame {
         panel.add(buttonPanel, gbc);
 
         // 状态显示
-        gbc.gridx = 0; gbc.gridy = 6;
+        gbc.gridx = 0;
+        gbc.gridy = 6;
         gbc.gridwidth = 4;
         gbc.insets = new Insets(15, 8, 8, 8);
         statusLabel = new JLabel("状态: 就绪", SwingConstants.CENTER);
@@ -235,7 +278,8 @@ public class CameraToRTSPGUI extends JFrame {
         panel.add(statusLabel, gbc);
 
         // 统计信息
-        gbc.gridx = 0; gbc.gridy = 7;
+        gbc.gridx = 0;
+        gbc.gridy = 7;
         statsLabel = new JLabel("帧数: 0 | 时长: 0s | FPS: 0.0", SwingConstants.CENTER);
         statsLabel.setFont(new Font("宋体", Font.BOLD, 12));
         statsLabel.setForeground(Color.DARK_GRAY);
@@ -266,7 +310,12 @@ public class CameraToRTSPGUI extends JFrame {
         JButton button = new JButton(text);
         button.setBackground(bgColor);
         button.setForeground(Color.BLACK);
-        button.setFont(new Font("微软雅黑", Font.BOLD, 12));
+        String[] fontChain = {
+                "Segoe UI Emoji",    // 首选：用于显示彩色Emoji和符号
+                "Segoe UI Symbol",   // 次选：用于显示单色符号
+                "微软雅黑" // 保底：用于显示中文及其他所有字符
+        };
+        button.setFont(new Font(String.join(", ", fontChain), Font.BOLD, 12));
         button.setFocusPainted(false);
         button.setBorder(BorderFactory.createRaisedBevelBorder());
         button.setPreferredSize(new Dimension(140, 40));
@@ -276,6 +325,7 @@ public class CameraToRTSPGUI extends JFrame {
                 button.setBackground(bgColor.brighter());
                 button.setForeground(Color.WHITE);
             }
+
             public void mouseExited(java.awt.event.MouseEvent evt) {
                 button.setBackground(bgColor);
                 button.setForeground(Color.BLACK);
